@@ -15,7 +15,7 @@ void transfer(char* buffer, int fd_from)
 
 int main(int argc, char** argv)
 {
-	char* buffer =(char*) malloc(BUF_SIZE);
+	char* buffer = (char*) malloc(BUF_SIZE);
 	
 	if (argc == 1)
 	{
