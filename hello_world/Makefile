@@ -1,7 +1,7 @@
-all: hello
-hello: hello.o
+all: hello_world
+hello_world: hello_world.o
 	gcc -s $< -o $@
-hello.o: hello.c
+hello_world.o: hello_world.c
 	gcc -c $< -o $@
 clean:
-	rm -f hello hello.o
+	rm -f hello_world hello_world.o
