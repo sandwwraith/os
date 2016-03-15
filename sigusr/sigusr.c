@@ -4,22 +4,27 @@
 #include <errno.h>
 
 void catcher(int signum, siginfo_t* siginfo, void* context) {
-    printf("SIGUSR%d from %d\n", signum == (SIGUSR1) ? 1 : 2, siginfo->si_pid);
+    printf("Signal #%d from %d\n", signum , siginfo->si_pid);
     exit(0);
 }
 
 int main() {
     struct sigaction action;
     sigemptyset(&action.sa_mask);
-    sigaddset(&action.sa_mask, SIGUSR1);
-    sigaddset(&action.sa_mask, SIGUSR2);
     action.sa_flags = SA_SIGINFO;
-
     action.sa_sigaction = &catcher;
-    if (sigaction(SIGUSR1, &action, NULL) || sigaction(SIGUSR2, &action, NULL)) {
-        perror("Cannot set sighandlers"); 
-		return errno;
-    }
+	int i;
+	for (i = 1; i<=31; ++i) {
+		if (i == SIGKILL || i == SIGSTOP) continue;
+		sigaddset(&action.sa_mask, i);
+	}
+	for (i = 1; i<=31; ++i) {
+		if (i == SIGKILL || i == SIGSTOP) continue;
+	
+		if (sigaction(i, &action, NULL)) {
+			perror("Cannot set sighandler"); 
+		}
+	}
 
 	sleep(10);
 	printf("No signals were caught\n");
