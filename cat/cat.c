@@ -2,14 +2,18 @@
 #include <stdlib.h>
 #include <fcntl.h>
 
-#define BUF_SIZE 100
+#define BUF_SIZE 10
 
 void transfer(char* buffer, int fd_from) 
 {
 	ssize_t br;
 	while ((br=read(fd_from, buffer, BUF_SIZE))>0)
 	{
-		write(1, buffer, br);
+		ssize_t wr = br, res;
+		while (wr>0 && (res = write(1, buffer+(br-wr), wr))) {
+			if (res < 0) return;
+			wr = br-res;
+		}
 	}
 }
 
