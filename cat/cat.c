@@ -19,7 +19,7 @@ void transfer(char* buffer, int fd_from)
 				else
 					return;
 			}
-			wr = br-res;
+			wr -=res;
 		}
 	}
 }
