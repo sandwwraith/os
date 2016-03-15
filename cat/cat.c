@@ -1,17 +1,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <errno.h>
 
-#define BUF_SIZE 10
+#define BUF_SIZE 100
+
 
 void transfer(char* buffer, int fd_from) 
 {
 	ssize_t br;
-	while ((br=read(fd_from, buffer, BUF_SIZE))>0)
+	while ((br=read(fd_from, buffer, BUF_SIZE))>0 || errno == EINTR)
 	{
 		ssize_t wr = br, res;
 		while (wr>0 && (res = write(1, buffer+(br-wr), wr))) {
-			if (res < 0) return;
+			if (res < 0) {
+				if (errno == EINTR) 
+					continue;
+				else
+					return;
+			}
 			wr = br-res;
 		}
 	}
