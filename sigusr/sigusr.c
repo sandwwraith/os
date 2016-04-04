@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <errno.h>
 
 void catcher(int signum, siginfo_t* siginfo, void* context) {
     printf("SIGUSR%d from %d\n", signum == (SIGUSR1) ? 1 : 2, siginfo->si_pid);
@@ -17,8 +18,10 @@ int main() {
     action.sa_sigaction = &catcher;
     if (sigaction(SIGUSR1, &action, NULL) || sigaction(SIGUSR2, &action, NULL)) {
         perror("Cannot set sighandlers"); 
+		return errno;
     }
 
-    sleep(10);
-    printf("No signals were caught\n");
+	sleep(10);
+	printf("No signals were caught\n");
+	return 0;
 }	
