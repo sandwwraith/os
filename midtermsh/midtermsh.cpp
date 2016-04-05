@@ -9,7 +9,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 
-#define BUF_LEN 100
+#define BUF_LEN 1024
 
 pid_t cur_child = -1;
 int pip_fd = -1;
@@ -57,7 +57,11 @@ pid_t launch_all(std::string command, int stdIn, int stdOut) {
 				dup2(pipel[0], STDIN_FILENO);
 				close(pipel[0]);
 				close(pipel[1]);
+			} else {
+				dup2(stdIn, STDIN_FILENO);
+				close(stdIn);
 			}
+
 			if (i != coms.size() -1 ) {
 				dup2(piper[1], STDOUT_FILENO);
 			}
@@ -124,7 +128,6 @@ int main() {
 	while (1){
 		r = read(0, &buf, BUF_LEN);
 		if (r <= 0) { 
-			waitpid(cur_child, &r, 0);
 			exit(0);
 		}
 		if (cur_child != -1 && waitpid(cur_child, &status, WNOHANG) == 0) {
