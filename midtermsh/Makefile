@@ -1,7 +1,7 @@
-blyat: midterm
+all: midtermsh
 
-midterm: midterm.cpp
-	g++ -std=c++11 -Wall midterm.cpp -o midterm
+midtermsh: midtermsh.cpp
+	g++ -std=c++11 -Wall midtermsh.cpp -o midtermsh
 
 clean:
-	rm -f midterm
+	rm -f midtermsh
