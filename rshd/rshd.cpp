@@ -4,11 +4,14 @@
 #include <vector>
 
 #include <sys/types.h> 
-#include <sys/socket.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <memory.h>
 #include <sys/epoll.h>
+#include <fcntl.h>
+#include <termios.h>
 
 #define MAX_EVENTS 10
 #define BUFFER_SIZE 100
@@ -59,7 +62,8 @@ struct context
 			return -1;
 		}
 		std::string str(buf, r);
-		std::cout<<"Client send: " << str;
+		std::cout<< (this->type == context_t::client ? "Client" : "PTY" )<< " send: " << str;
+		write(pair->fd, buf, r);
 		return 0;
 	}
 };
@@ -90,8 +94,8 @@ int make_lstn_socket(int port)
 }
 
 /**
-* Creates a epoll FD for listening server socket
-*/
+ * Creates a epoll FD for listening server socket
+ */
 int make_epoll(context* listen_sock) 
 {
 	int	epollfd = epoll_create(MAX_EVENTS);
@@ -132,8 +136,21 @@ void add_to_epoll(Epoll const& epoll, context* client)
 	}
 }
 
-std::vector<std::shared_ptr<context>> clients;
-std::vector<std::shared_ptr<context>> terms;
+int create_master_pty()
+{
+	int fdm = posix_openpt(O_RDWR);
+	if (fdm < 0)
+	{
+		perror("Open pty err");
+		exit(EXIT_FAILURE);
+	}
+	if (grantpt(fdm) || unlockpt(fdm)) {
+		perror("Unlocking pty err");
+		exit(EXIT_FAILURE);
+	}
+	return fdm;
+}
+
 
 int main(int argc, char* argv[])
 {
@@ -144,6 +161,8 @@ int main(int argc, char* argv[])
 	}
 	auto serv_sock = std::shared_ptr<context>(new context(context_t::server,make_lstn_socket(atoi(argv[1]))));
 	auto epoll = Epoll(make_epoll(serv_sock.get()));
+	std::vector<std::shared_ptr<context>> clients;
+	std::vector<std::shared_ptr<context>> terms;
 	epoll_event events[MAX_EVENTS];
 	for (int num_events;;) // Main cycle
 	{
@@ -159,8 +178,57 @@ int main(int argc, char* argv[])
 			{
 				//Incoming connection
 				auto client = std::make_shared<context>(context_t::client, accept_conn(serv_sock->fd));
+				auto terminal = std::make_shared<context>(context_t::pty, create_master_pty());
+
+				client->pair = terminal;
+				terminal->pair = client;
+
 				clients.push_back(client);
+				terms.push_back(terminal);
+
+				add_to_epoll(epoll, terminal.get());
 				add_to_epoll(epoll, client.get());
+
+				int slave = open(ptsname(terminal->fd), O_RDWR);
+				//Launching shell
+				if (!fork())
+				{
+					//Destructors will clean up all file descriptors
+					clients.~vector();
+					terms.~vector();
+					client.reset();
+					terminal.reset();
+					serv_sock.reset();
+					close(epoll);
+					//Setting new terminal
+
+					struct termios slave_orig_term_settings; // Saved terminal settings
+					struct termios new_term_settings; // Current terminal settings
+					tcgetattr(slave, &slave_orig_term_settings);
+					new_term_settings = slave_orig_term_settings;
+					new_term_settings.c_lflag &= ~(ECHO | ECHONL);
+					//cfmakeraw (&new_term_settings);
+					tcsetattr (slave, TCSANOW, &new_term_settings);
+
+					//Setting new terminal as STD
+					dup2(slave, STDIN_FILENO);
+					dup2(slave, STDOUT_FILENO);
+					dup2(slave, STDERR_FILENO);
+					close(slave);
+
+					// Make the current process a new session leader
+					setsid();
+
+					// As the child is a session leader, set the controlling terminal to be the slave side of the PTY
+					// (Mandatory for programs like the shell to make them manage correctly their outputs)
+					ioctl(0, TIOCSCTTY, 1);
+
+					execlp("/bin/sh","sh", NULL);
+				}
+				else
+				{
+					close(slave);
+				}
 			}
 			else 
 			{
