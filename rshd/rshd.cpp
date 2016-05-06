@@ -86,8 +86,13 @@ int make_epoll(Socket const& listen_sock)
 	return epollfd;
 }
 
-int main() 
+int main(int argc, char* argv[])
 {
+	if (argc < 2)
+	{
+		fprintf(stderr,"ERROR, no port provided\n");
+		exit(EXIT_FAILURE);
+	}
 	auto serv_sock = Socket(make_lstn_socket(2539));
 	auto epoll = Epoll(make_epoll(serv_sock));
 	epoll_event events[MAX_EVENTS];
