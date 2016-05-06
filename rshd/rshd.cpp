@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <memory>
 #include <vector>
@@ -12,6 +13,7 @@
 #include <sys/epoll.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <signal.h>
 
 #define MAX_EVENTS 10
 #define BUFFER_SIZE 1024
@@ -57,6 +59,7 @@ struct context
 	int transfer()
 	{
 		char buf[BUFFER_SIZE];
+		memset(buf,0, BUFFER_SIZE);
 		auto r = read(fd, buf, BUFFER_SIZE);
 		if (r <= 0) {
 			return -1;
@@ -151,15 +154,73 @@ int create_master_pty()
 	return fdm;
 }
 
+std::string const daemon_file = "/tmp/rshd.pid";
+std::string const daemon_err_log = "/tmp/rshd.err.log";
+
+void demonize()
+{
+	std::ifstream inf(daemon_file);
+	if (inf)
+	{
+		int pid;
+		inf >> pid;
+		if (!kill(pid, 0))
+		{
+			std::cerr << "Daemon is already running with PID " << pid<<std::endl;
+			exit(pid);
+		}
+	}
+	inf.close();
+	//start forking
+	auto res = fork();
+	if (res == -1) {
+		perror("Fork FAIL");
+		exit(EXIT_FAILURE);
+	}
+
+	if (res != 0)
+	{
+		//Parent not needed anymore
+		exit(EXIT_SUCCESS);
+	}
+	//Child here
+	setsid();
+
+	int daemon_pid = fork();
+
+	if (daemon_pid)
+	{
+		std::ofstream ouf(daemon_file, std::ofstream::trunc);
+		ouf<<daemon_pid;
+		ouf.close();
+		exit(EXIT_SUCCESS);
+	}
+	//Redirecting STD streams to /dev/null
+	int slave = open("/dev/null", O_RDWR);
+	int err = open(daemon_err_log.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0644);
+	dup2(slave, STDIN_FILENO);
+	dup2(slave, STDOUT_FILENO);
+	dup2(err, STDERR_FILENO);
+	close(slave);
+	close(err);
+	//Running main function from daemon
+	return;
+}
 
 int main(int argc, char* argv[])
 {
+	int port = 2539;
 	if (argc < 2)
 	{
 		fprintf(stderr,"ERROR, no port provided\n");
 		exit(EXIT_FAILURE);
 	}
-	auto serv_sock = std::shared_ptr<context>(new context(context_t::server,make_lstn_socket(atoi(argv[1]))));
+	else
+	{
+		port = atoi(argv[1]);
+	}
+	demonize();
+	auto serv_sock = std::shared_ptr<context>(new context(context_t::server,make_lstn_socket(port)));
 	auto epoll = Epoll(make_epoll(serv_sock.get()));
 	std::vector<std::shared_ptr<context>> clients;
 	std::vector<std::shared_ptr<context>> terms;
