@@ -1,4 +1,6 @@
 #include <iostream>
+#include <string>
+
 #include <sys/types.h> 
 #include <sys/socket.h>
 #include <unistd.h>
@@ -7,6 +9,7 @@
 #include <sys/epoll.h>
 
 #define MAX_EVENTS 10
+#define BUFFER_SIZE 100
 
 /**
  * Wrapper RAII class
@@ -61,6 +64,9 @@ int make_lstn_socket(int port)
 	return sockfd;
 }
 
+/**
+* Creates a epoll FD for listening server socket
+*/
 int make_epoll(Socket const& listen_sock) 
 {
 	int	epollfd = epoll_create(MAX_EVENTS);
@@ -74,9 +80,9 @@ int make_epoll(Socket const& listen_sock)
 	ev.data.fd = listen_sock;
 	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, listen_sock, &ev) == -1) {
 		perror("epoll_ctl: listen_sock");
+		close(epollfd);
 		exit(EXIT_FAILURE);
 	}
-
 	return epollfd;
 }
 
@@ -85,7 +91,7 @@ int main()
 	auto serv_sock = Socket(make_lstn_socket(2539));
 	auto epoll = Epoll(make_epoll(serv_sock));
 	epoll_event events[MAX_EVENTS];
-	for (int num_events;;) // Main
+	for (int num_events;;) // Main cycle
 	{
 		num_events = epoll_wait(epoll, events, MAX_EVENTS, -1);
 		if (num_events == -1) {
@@ -114,7 +120,15 @@ int main()
 			else 
 			{
 				//Working with client
-				std::cout<<"Client send\n";
+				auto fd = events[n].data.fd;
+				char buf[BUFFER_SIZE];
+				auto r = read(fd, buf, BUFFER_SIZE);
+				if (r <= 0) {
+					close(fd);
+					continue;
+				}
+				std::string str(buf, r);
+				std::cout<<"Client send: " << str;
 			}
 		}
 	}
