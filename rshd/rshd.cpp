@@ -51,6 +51,17 @@ struct context
 	RAIIFD fd;
 	std::shared_ptr<context> pair;
 	context(context_t t, int fd) : type(t), fd(fd) {}
+	int transfer()
+	{
+		char buf[BUFFER_SIZE];
+		auto r = read(fd, buf, BUFFER_SIZE);
+		if (r <= 0) {
+			return -1;
+		}
+		std::string str(buf, r);
+		std::cout<<"Client send: " << str;
+		return 0;
+	}
 };
 /**
  * Creates listen server socket, binds it to given port and starts listening.
@@ -110,6 +121,17 @@ int accept_conn(int serv_sock)
 	return cli_fd;
 }
 
+void add_to_epoll(Epoll const& epoll, context* client)
+{
+	epoll_event ev;
+	ev.events = EPOLLIN | EPOLLET;
+	ev.data.ptr = (void*) client;
+	if (epoll_ctl(epoll, EPOLL_CTL_ADD, client->fd, &ev) == -1) {
+		perror("epoll_ctl: client");
+		exit(EXIT_FAILURE);
+	}
+}
+
 std::vector<std::shared_ptr<context>> clients;
 std::vector<std::shared_ptr<context>> terms;
 
@@ -138,26 +160,12 @@ int main(int argc, char* argv[])
 				//Incoming connection
 				auto client = std::make_shared<context>(context_t::client, accept_conn(serv_sock->fd));
 				clients.push_back(client);
-				epoll_event ev;
-				ev.events = EPOLLIN | EPOLLET;
-				ev.data.ptr = (void*) client.get();
-				if (epoll_ctl(epoll, EPOLL_CTL_ADD, client->fd, &ev) == -1) {
-					perror("epoll_ctl: client");
-					exit(EXIT_FAILURE);
-				}
+				add_to_epoll(epoll, client.get());
 			}
 			else 
 			{
 				//Working with client
-				int fd = cont->fd;
-				char buf[BUFFER_SIZE];
-				auto r = read(fd, buf, BUFFER_SIZE);
-				if (r <= 0) {
-					close(fd);
-					continue;
-				}
-				std::string str(buf, r);
-				std::cout<<"Client send: " << str;
+				cont->transfer();
 			}
 		}
 	}
