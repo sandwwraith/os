@@ -14,7 +14,7 @@
 #include <termios.h>
 
 #define MAX_EVENTS 10
-#define BUFFER_SIZE 100
+#define BUFFER_SIZE 1024
 
 /**
  * Wrapper RAII class
@@ -233,7 +233,23 @@ int main(int argc, char* argv[])
 			else 
 			{
 				//Working with client
-				cont->transfer();
+				if (cont->transfer() == -1)
+				{
+					//Disconnecting client
+					context* cterm = cont->pair.get();
+					for (auto it = clients.begin(); it!=clients.end(); ++it) {
+						if (it->get() == cont) {
+							clients.erase(it);
+							break;
+						}
+					}
+					for (auto it = terms.begin(); it!=terms.end(); ++it) {
+						if (it->get() == cterm) {
+							terms.erase(it);
+							break;
+						}
+					}
+				}
 			}
 		}
 	}
