@@ -1,5 +1,7 @@
 #include <iostream>
 #include <string>
+#include <memory>
+#include <vector>
 
 #include <sys/types.h> 
 #include <sys/socket.h>
@@ -38,6 +40,18 @@ class RAIIFD
 using Socket = RAIIFD;
 using Epoll = RAIIFD;
 
+enum context_t
+{
+	server, client, pty
+};
+
+struct context
+{
+	context_t type;
+	RAIIFD fd;
+	std::shared_ptr<context> pair;
+	context(context_t t, int fd) : type(t), fd(fd) {}
+};
 /**
  * Creates listen server socket, binds it to given port and starts listening.
  */
@@ -67,7 +81,7 @@ int make_lstn_socket(int port)
 /**
 * Creates a epoll FD for listening server socket
 */
-int make_epoll(Socket const& listen_sock) 
+int make_epoll(context* listen_sock) 
 {
 	int	epollfd = epoll_create(MAX_EVENTS);
 	if (epollfd == -1) {
@@ -77,14 +91,27 @@ int make_epoll(Socket const& listen_sock)
 
 	epoll_event ev;
 	ev.events = EPOLLIN;
-	ev.data.fd = listen_sock;
-	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, listen_sock, &ev) == -1) {
+	ev.data.ptr = (void*)listen_sock;
+	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, listen_sock->fd, &ev) == -1) {
 		perror("epoll_ctl: listen_sock");
 		close(epollfd);
 		exit(EXIT_FAILURE);
 	}
 	return epollfd;
 }
+
+int accept_conn(int serv_sock)
+{
+	sockaddr_in cli_addr;
+	memset(&cli_addr,0,sizeof(sockaddr_in));
+	socklen_t len = sizeof(sockaddr_in);
+	auto cli_fd = accept(serv_sock, (struct sockaddr*) &cli_addr, &len);
+	std::cout<<"Client accepted!\n";			
+	return cli_fd;
+}
+
+std::vector<std::shared_ptr<context>> clients;
+std::vector<std::shared_ptr<context>> terms;
 
 int main(int argc, char* argv[])
 {
@@ -93,8 +120,8 @@ int main(int argc, char* argv[])
 		fprintf(stderr,"ERROR, no port provided\n");
 		exit(EXIT_FAILURE);
 	}
-	auto serv_sock = Socket(make_lstn_socket(2539));
-	auto epoll = Epoll(make_epoll(serv_sock));
+	auto serv_sock = std::shared_ptr<context>(new context(context_t::server,make_lstn_socket(atoi(argv[1]))));
+	auto epoll = Epoll(make_epoll(serv_sock.get()));
 	epoll_event events[MAX_EVENTS];
 	for (int num_events;;) // Main cycle
 	{
@@ -105,19 +132,16 @@ int main(int argc, char* argv[])
 		}
 		for (int n = 0; n < num_events; ++n) 
 		{
-			if (events[n].data.fd == serv_sock) 
+			context* cont = (context*) events[n].data.ptr;
+			if (cont->type == context_t::server) 
 			{
 				//Incoming connection
-				sockaddr_in cli_addr;
-				memset(&cli_addr,0,sizeof(sockaddr_in));
-				socklen_t len = sizeof(sockaddr_in);
-				auto cli_fd = accept(serv_sock, (struct sockaddr*) &cli_addr, &len);
-				std::cout<<"Client accepted!\n";			
-
+				auto client = std::make_shared<context>(context_t::client, accept_conn(serv_sock->fd));
+				clients.push_back(client);
 				epoll_event ev;
 				ev.events = EPOLLIN | EPOLLET;
-				ev.data.fd = cli_fd;
-				if (epoll_ctl(epoll, EPOLL_CTL_ADD, cli_fd, &ev) == -1) {
+				ev.data.ptr = (void*) client.get();
+				if (epoll_ctl(epoll, EPOLL_CTL_ADD, client->fd, &ev) == -1) {
 					perror("epoll_ctl: client");
 					exit(EXIT_FAILURE);
 				}
@@ -125,7 +149,7 @@ int main(int argc, char* argv[])
 			else 
 			{
 				//Working with client
-				auto fd = events[n].data.fd;
+				int fd = cont->fd;
 				char buf[BUFFER_SIZE];
 				auto r = read(fd, buf, BUFFER_SIZE);
 				if (r <= 0) {
