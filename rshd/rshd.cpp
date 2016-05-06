@@ -296,8 +296,9 @@ int main(int argc, char* argv[])
 				//Working with client
 				if (cont->transfer() == -1)
 				{
-					//Disconnecting client
+					std::cout<<"Disconnecting client"<<std::endl;
 					context* cterm = cont->pair.get();
+					if (cterm->type == context_t::client) std::swap(cterm, cont);
 					for (auto it = clients.begin(); it!=clients.end(); ++it) {
 						if (it->get() == cont) {
 							clients.erase(it);
