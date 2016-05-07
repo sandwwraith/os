@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <signal.h>
+#include <wait.h>
 
 #define MAX_EVENTS 10
 #define BUFFER_SIZE 1024
@@ -54,7 +55,8 @@ struct context
 {
 	context_t type;
 	RAIIFD fd;
-	std::shared_ptr<context> pair;
+	context* pair;
+	pid_t child_proc = -1;
 	context(context_t t, int fd) : type(t), fd(fd) {}
 	int transfer()
 	{
@@ -66,9 +68,13 @@ struct context
 		}
 		std::string str(buf, r);
 		std::cout<< (this->type == context_t::client ? "Client" : "PTY" )<< " send: " << str;
-		write(pair->fd, buf, r);
+		ssize_t wr = r, res;
+		while (wr > 0 && (res = write(pair->fd, buf+r-wr, wr))) {
+			wr = r - res;
+		}
 		return 0;
 	}
+	context (context const& other) = delete;
 };
 /**
  * Creates listen server socket, binds it to given port and starts listening.
@@ -207,6 +213,22 @@ void demonize()
 	return;
 }
 
+std::vector<std::shared_ptr<context>> clients;
+std::vector<std::shared_ptr<context>> terms;
+
+void catcher(int signum, siginfo_t* siginfo, void* context) {
+	for (auto ptr:clients)
+	{
+		pid_t child_proc = ptr->child_proc;
+
+		std::cerr<<"Killing "<<child_proc<<std::endl;
+		int status;
+		kill(child_proc, SIGKILL);
+		waitpid(child_proc, &status, 0);
+	}
+	exit(0);
+}
+
 int main(int argc, char* argv[])
 {
 	int port = 2539;
@@ -220,10 +242,18 @@ int main(int argc, char* argv[])
 		port = atoi(argv[1]);
 	}
 	demonize();
+
+	struct sigaction action;
+	action.sa_flags = SA_SIGINFO;
+
+	action.sa_sigaction = &catcher;
+	if (sigaction(SIGTERM, &action, NULL) || sigaction(SIGINT, &action, NULL)) {
+		perror("Cannot set sighandlers");
+		exit(EXIT_FAILURE);
+	}
+
 	auto serv_sock = std::shared_ptr<context>(new context(context_t::server,make_lstn_socket(port)));
 	auto epoll = Epoll(make_epoll(serv_sock.get()));
-	std::vector<std::shared_ptr<context>> clients;
-	std::vector<std::shared_ptr<context>> terms;
 	epoll_event events[MAX_EVENTS];
 	for (int num_events;;) // Main cycle
 	{
@@ -238,11 +268,11 @@ int main(int argc, char* argv[])
 			if (cont->type == context_t::server) 
 			{
 				//Incoming connection
-				auto client = std::make_shared<context>(context_t::client, accept_conn(serv_sock->fd));
-				auto terminal = std::make_shared<context>(context_t::pty, create_master_pty());
+				std::shared_ptr<context> client = std::make_shared<context>(context_t::client, accept_conn(serv_sock->fd));
+				std::shared_ptr<context> terminal = std::make_shared<context>(context_t::pty, create_master_pty());
 
-				client->pair = terminal;
-				terminal->pair = client;
+				client->pair = terminal.get();
+				terminal->pair = client.get();
 
 				clients.push_back(client);
 				terms.push_back(terminal);
@@ -252,7 +282,8 @@ int main(int argc, char* argv[])
 
 				int slave = open(ptsname(terminal->fd), O_RDWR);
 				//Launching shell
-				if (!fork())
+				auto proc= fork();
+				if (!proc)
 				{
 					//Destructors will clean up all file descriptors
 					clients.~vector();
@@ -261,8 +292,8 @@ int main(int argc, char* argv[])
 					terminal.reset();
 					serv_sock.reset();
 					close(epoll);
-					//Setting new terminal
 
+					//Setting new terminal
 					struct termios slave_orig_term_settings; // Saved terminal settings
 					struct termios new_term_settings; // Current terminal settings
 					tcgetattr(slave, &slave_orig_term_settings);
@@ -289,6 +320,7 @@ int main(int argc, char* argv[])
 				else
 				{
 					close(slave);
+					client->child_proc = proc;
 				}
 			}
 			else 
@@ -297,7 +329,7 @@ int main(int argc, char* argv[])
 				if (cont->transfer() == -1)
 				{
 					std::cout<<"Disconnecting client"<<std::endl;
-					context* cterm = cont->pair.get();
+					context* cterm = cont->pair;
 					if (cterm->type == context_t::client) std::swap(cterm, cont);
 					for (auto it = clients.begin(); it!=clients.end(); ++it) {
 						if (it->get() == cont) {
