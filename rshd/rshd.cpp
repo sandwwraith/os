@@ -68,7 +68,9 @@ struct context
 		}
 		std::string str(buf, r);
 		std::cout<< (this->type == context_t::client ? "Client" : "PTY" )<< " send: " << str;
-		ssize_t wr = r, res;
+		ssize_t wr = r;
+		ssize_t res;
+
 		while (wr > 0 && (res = write(pair->fd, buf+r-wr, wr))) {
 			wr = r - res;
 		}
@@ -286,8 +288,8 @@ int main(int argc, char* argv[])
 				if (!proc)
 				{
 					//Destructors will clean up all file descriptors
-					clients.~vector();
-					terms.~vector();
+					clients.clear();
+					terms.clear();
 					client.reset();
 					terminal.reset();
 					serv_sock.reset();
