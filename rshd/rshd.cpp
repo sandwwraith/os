@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <deque>
 
 #include <sys/types.h> 
 #include <unistd.h>
@@ -57,22 +58,50 @@ struct context
 	RAIIFD fd;
 	context* pair;
 	pid_t child_proc = -1;
-	context(context_t t, int fd) : type(t), fd(fd) {}
-	int transfer()
+	char rbuf[BUFFER_SIZE];
+	std::deque<std::string> write_buf;
+	context(context_t t, int fd) : type(t), fd(fd)
 	{
-		char buf[BUFFER_SIZE];
-		memset(buf,0, BUFFER_SIZE);
-		auto r = read(fd, buf, BUFFER_SIZE);
-		if (r <= 0) {
+		memset(rbuf, 0, BUFFER_SIZE);
+	}
+	int contread()
+	{
+		std::string str;
+		ssize_t r = 1;
+		while (r > 0) {
+			r = read(fd, rbuf, BUFFER_SIZE);
+			if (r>0)
+			str+=std::string(rbuf,r);
+		}
+		if (r < 0 && errno!= EAGAIN) {
+			//error
 			return -1;
 		}
-		std::string str(buf, r);
 		std::cout<< (this->type == context_t::client ? "Client" : "PTY" )<< " send: " << str;
-		ssize_t wr = r;
-		ssize_t res;
+		pair->write_buf.push_back(str);
+		pair->contwrite();
+		return 0;
+	}
+	int contwrite()
+	{
+		while (!write_buf.empty())
+		{
+			std::string str = write_buf.front();
+			write_buf.pop_front();
+			std::cout << "Writing " << str  << std::endl;
+			const char* buf = str.c_str();
+			size_t r = str.size();
+			ssize_t wr = r;
+			ssize_t res;
 
-		while (wr > 0 && (res = write(pair->fd, buf+r-wr, wr))) {
-			wr = r - res;
+			while (wr > 0 && (res = write(fd, buf+r-wr, wr))) {
+				wr = r - res;
+			}
+			if (wr > 0) {
+				if (errno != EAGAIN) return -1;
+				std::string left(buf+r-wr,wr);
+				write_buf.push_front(left);
+			}
 		}
 		return 0;
 	}
@@ -139,7 +168,7 @@ int accept_conn(int serv_sock)
 void add_to_epoll(Epoll const& epoll, context* client)
 {
 	epoll_event ev;
-	ev.events = EPOLLIN | EPOLLET;
+	ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
 	ev.data.ptr = (void*) client;
 	if (epoll_ctl(epoll, EPOLL_CTL_ADD, client->fd, &ev) == -1) {
 		perror("epoll_ctl: client");
@@ -160,6 +189,19 @@ int create_master_pty()
 		exit(EXIT_FAILURE);
 	}
 	return fdm;
+}
+
+void make_nonblocking(int fd)
+{
+	int flags;
+	flags = fcntl(fd, F_GETFL, 0);
+	if (flags == -1) {
+		perror("Non bocking set failed");
+	}
+	flags |= O_NONBLOCK;
+	if (fcntl(fd, F_SETFL, flags) < 0) {
+		perror("Non bocking set failed");
+	}
 }
 
 std::string const daemon_file = "/tmp/rshd.pid";
@@ -279,6 +321,9 @@ int main(int argc, char* argv[])
 				clients.push_back(client);
 				terms.push_back(terminal);
 
+				make_nonblocking(client->fd);
+				make_nonblocking(terminal->fd);
+
 				add_to_epoll(epoll, terminal.get());
 				add_to_epoll(epoll, client.get());
 
@@ -327,10 +372,17 @@ int main(int argc, char* argv[])
 			}
 			else 
 			{
+				int res;
+				if ((events[n].events & EPOLLIN) != 0) {
+					res = cont->contread();
+				}
+				if ((events[n].events & EPOLLOUT) != 0){
+					res = cont->contwrite();
+				}
 				//Working with client
-				if (cont->transfer() == -1)
+				if (res == -1)
 				{
-					std::cout<<"Disconnecting client"<<std::endl;
+					std::cerr<<"Disconnecting client"<<std::endl;
 					context* cterm = cont->pair;
 					if (cterm->type == context_t::client) std::swap(cterm, cont);
 					for (auto it = clients.begin(); it!=clients.end(); ++it) {
