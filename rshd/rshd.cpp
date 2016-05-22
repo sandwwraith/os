@@ -260,7 +260,13 @@ void demonize()
 std::vector<std::shared_ptr<context>> clients;
 std::vector<std::shared_ptr<context>> terms;
 
+static volatile bool exiting = false;
+
 void catcher(int signum, siginfo_t* siginfo, void* context) {
+	exiting = true;
+}
+
+void finalize() {
 	for (auto ptr:clients)
 	{
 		pid_t child_proc = ptr->child_proc;
@@ -270,6 +276,7 @@ void catcher(int signum, siginfo_t* siginfo, void* context) {
 		kill(child_proc, SIGKILL);
 		waitpid(child_proc, &status, 0);
 	}
+	remove(daemon_file.c_str());
 	exit(0);
 }
 
@@ -302,6 +309,7 @@ int main(int argc, char* argv[])
 	for (int num_events;;) // Main cycle
 	{
 		num_events = epoll_wait(epoll, events, MAX_EVENTS, -1);
+		if (exiting) break;
 		if (num_events == -1) {
 			perror("Wait error");
 			exit(EXIT_FAILURE);
@@ -402,5 +410,6 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	return 0;
+	finalize();
+	return EXIT_SUCCESS;
 }
