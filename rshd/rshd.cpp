@@ -77,6 +77,7 @@ struct context
 			//error
 			return -1;
 		}
+		if ( str.size() == 0) return -1; // 0 read bytes mean EOF
 		std::cout<< (this->type == context_t::client ? "Client" : "PTY" )<< " send: " << str;
 		pair->write_buf.push_back(str);
 		pair->contwrite();
@@ -88,21 +89,25 @@ struct context
 		{
 			std::string str = write_buf.front();
 			write_buf.pop_front();
-			std::cout << "Writing " << str  << std::endl;
+			std::cout << "Writing " << str << std::endl;
 			const char* buf = str.c_str();
 			size_t r = str.size();
 			ssize_t wr = r;
 			ssize_t res;
 
 			while (wr > 0 && (res = write(fd, buf+r-wr, wr))) {
+			//	std::cout <<"wr "<< wr << " res " << res <<std::endl;
+				if (res == -1) break;
 				wr = r - res;
 			}
 			if (wr > 0) {
 				if (errno != EAGAIN) return -1;
 				std::string left(buf+r-wr,wr);
 				write_buf.push_front(left);
+				break;
 			}
 		}
+		std::cout<<"Write complete\n";
 		return 0;
 	}
 	context (context const& other) = delete;
@@ -168,7 +173,7 @@ int accept_conn(int serv_sock)
 void add_to_epoll(Epoll const& epoll, context* client)
 {
 	epoll_event ev;
-	ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+	ev.events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLET;
 	ev.data.ptr = (void*) client;
 	if (epoll_ctl(epoll, EPOLL_CTL_ADD, client->fd, &ev) == -1) {
 		perror("epoll_ctl: client");
@@ -353,7 +358,7 @@ int main(int argc, char* argv[])
 					struct termios new_term_settings; // Current terminal settings
 					tcgetattr(slave, &slave_orig_term_settings);
 					new_term_settings = slave_orig_term_settings;
-					new_term_settings.c_lflag &= ~(ECHO | ECHONL);
+					new_term_settings.c_lflag &= ~(ECHO | ECHONL | ICANON);
 					//cfmakeraw (&new_term_settings);
 					tcsetattr (slave, TCSANOW, &new_term_settings);
 
@@ -380,14 +385,15 @@ int main(int argc, char* argv[])
 			}
 			else 
 			{
-				int res;
+				//Working with client
+				int res = -1;
 				if ((events[n].events & EPOLLIN) != 0) {
+					std::cout<<"Event READ\n";
 					res = cont->contread();
-				}
-				if ((events[n].events & EPOLLOUT) != 0){
+				} else if ((events[n].events & EPOLLOUT) != 0){
+					std::cout<<"Event WRITE\n";
 					res = cont->contwrite();
 				}
-				//Working with client
 				if (res == -1)
 				{
 					std::cerr<<"Disconnecting client"<<std::endl;
@@ -395,12 +401,14 @@ int main(int argc, char* argv[])
 					if (cterm->type == context_t::client) std::swap(cterm, cont);
 					for (auto it = clients.begin(); it!=clients.end(); ++it) {
 						if (it->get() == cont) {
+							epoll_ctl(epoll, EPOLL_CTL_DEL, it->get()->fd, events+n);
 							clients.erase(it);
 							break;
 						}
 					}
 					for (auto it = terms.begin(); it!=terms.end(); ++it) {
 						if (it->get() == cterm) {
+							epoll_ctl(epoll, EPOLL_CTL_DEL, it->get()->fd, events+n);
 							terms.erase(it);
 							break;
 						}
